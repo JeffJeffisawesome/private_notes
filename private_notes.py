@@ -1,85 +1,170 @@
+import os
 import pickle
+import hmac
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.backends import default_backend
 
 class PrivNotes:
-  MAX_NOTE_LEN = 2048;
+    MAX_NOTE_LEN = 2048
 
-  def __init__(self, password, data = None, checksum = None):
-    """Constructor.
-    
-    Args:
-      password (str) : password for accessing the notes
-      data (str) [Optional] : a hex-encoded serialized representation to load
-                              (defaults to None, which initializes an empty notes database)
-      checksum (str) [Optional] : a hex-encoded checksum used to protect the data against
-                                  possible rollback attacks (defaults to None, in which
-                                  case, no rollback protection is guaranteed)
+    def __init__(self, password, data=None, checksum=None):
+        """Constructor.
+        
+        Args:
+          password (str) : password for accessing the notes
+          data (str) [Optional] : a hex-encoded serialized representation to load
+                                  (defaults to None, which initializes an empty notes database)
+          checksum (str) [Optional] : a hex-encoded checksum used to protect the data against
+                                      possible rollback attacks (defaults to None, in which
+                                      case, no rollback protection is guaranteed)
 
-    Raises:
-      ValueError : malformed serialized format
-    """
-    self.kvs = {}
-    if data is not None:
-      self.kvs = pickle.loads(bytes.fromhex(data))
+        Raises:
+          ValueError : malformed serialized format or authentication failure
+        """
+        self.kvs = {}
 
-  def dump(self):
-    """Computes a serialized representation of the notes database
-       together with a checksum.
-    
-    Returns: 
-      data (str) : a hex-encoded serialized representation of the contents of the notes
-                   database (that can be passed to the constructor)
-      checksum (str) : a hex-encoded checksum for the data used to protect
-                       against rollback attacks (up to 32 characters in length)
-    """
-    return pickle.dumps(self.kvs).hex(), ''
+        # Derive the key once with PBKDF2
+        self.salt = os.urandom(16) if data is None else bytes.fromhex(data[:32])
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=self.salt,
+            iterations=200000,
+            backend=default_backend()
+        )
+        self.key = kdf.derive(bytes(password, 'ascii'))
 
-  def get(self, title):
-    """Fetches the note associated with a title.
-    
-    Args:
-      title (str) : the title to fetch
-    
-    Returns: 
-      note (str) : the note associated with the requested title if
-                       it exists and otherwise None
-    """
-    if title in self.kvs:
-      return self.kvs[title]
-    return None
+        if data is not None:
+            # Load and decrypt the database
+            stored_checksum = data[-64:]
+            data_without_checksum = data[:-64]
 
-  def set(self, title, note):
-    """Associates a note with a title and adds it to the database
-       (or updates the associated note if the title is already
-       present in the database).
-       
-       Args:
-         title (str) : the title to set
-         note (str) : the note associated with the title
+            c = hmac.new(self.key, bytes(data_without_checksum, 'ascii'), digestmod='sha256').hexdigest()
+            if c != stored_checksum:
+                raise ValueError("Checksum mismatch! Potential rollback attack detected.")
 
-       Returns:
-         None
+            # Extract encrypted data (no nonce needed as it will be deterministic)
+            encrypted_data = bytes.fromhex(data_without_checksum[32:])
+            try:
+                decrypted_data = self._decrypt(b'titles', encrypted_data)
+                self.kvs = pickle.loads(decrypted_data)
+            except Exception:
+                raise ValueError("Authentication failed! Invalid password or corrupted data.")
 
-       Raises:
-         ValueError : if note length exceeds the maximum
-    """
-    if len(note) > self.MAX_NOTE_LEN:
-      raise ValueError('Maximum note length exceeded')
-    
-    self.kvs[title] = note
+        else:
+            # Initialize empty notes database for new instance
+            self.kvs = {}
 
+    def dump(self):
+        """Computes a serialized representation of the notes database
+           together with a checksum.
+        
+        Returns: 
+          data (str) : a hex-encoded serialized representation of the contents of the notes
+                       database (that can be passed to the constructor)
+          checksum (str) : a hex-encoded checksum for the data used to protect
+                           against rollback attacks (up to 64 characters in length)
+        """
+        serialized_data = self.salt.hex() + self._encrypt(b'titles', pickle.dumps(self.kvs)).hex()
 
-  def remove(self, title):
-    """Removes the note for the requested title from the database.
-       
-       Args:
-         title (str) : the title to remove
+        # Compute HMAC-SHA256 checksum
+        checksum = hmac.new(self.key, bytes(serialized_data, 'ascii'), digestmod='sha256').hexdigest()
 
-       Returns:
-         success (bool) : True if the title was removed and False if the title was
-                          not found
-    """
-    if title in self.kvs:
-      del self.kvs[title]
-      return True
+        return serialized_data + checksum, checksum
 
-    return False
+    def get(self, title):
+        """Fetches the note associated with a title.
+        
+        Args:
+          title (str) : the title to fetch
+        
+        Returns: 
+          note (str) : the note associated with the requested title if
+                       it exists, and otherwise None
+        """
+        hkey = hmac.new(self.key, bytes(title, 'ascii'), digestmod='sha256').hexdigest()
+        if hkey in self.kvs:
+            encrypted_note = self.kvs[hkey]
+            return self._decrypt(bytes(title, 'ascii'), encrypted_note).decode('ascii')
+        return None
+
+    def set(self, title, note):
+        """Associates a note with a title and adds it to the database
+           (or updates the associated note if the title is already
+           present in the database).
+           
+           Args:
+             title (str) : the title to set
+             note (str) : the note associated with the title
+
+           Returns:
+             None
+
+           Raises:
+             ValueError : if note length exceeds the maximum
+        """
+        if len(note) > self.MAX_NOTE_LEN:
+            raise ValueError('Maximum note length exceeded')
+
+        # Generate a unique key for the note using HMAC-SHA256
+        hkey = hmac.new(self.key, bytes(title, 'ascii'), digestmod='sha256').hexdigest()
+
+        # Encrypt the note using AES-GCM (deterministic nonce)
+        encrypted_note = self._encrypt(bytes(title, 'ascii'), bytes(note, 'ascii'))
+
+        # Store the encrypted note
+        self.kvs[hkey] = encrypted_note
+
+    def remove(self, title):
+        """Removes the note for the requested title from the database.
+           
+           Args:
+             title (str) : the title to remove
+
+           Returns:
+             success (bool) : True if the title was removed and False if the title was
+                              not found
+        """
+        hkey = hmac.new(self.key, bytes(title, 'ascii'), digestmod='sha256').hexdigest()
+        if hkey in self.kvs:
+            del self.kvs[hkey]
+            return True
+        return False
+
+    def _encrypt(self, nonce_source, plaintext):
+        """Encrypt the plaintext deterministically based on nonce_source.
+        
+        Args:
+            nonce_source (bytes): The source of the nonce, which in this case, is the title
+            plaintext (bytes): the note to encrypt
+
+        Returns:
+            bytes: the encrypted data
+        """
+        # Derive a deterministic 12-byte nonce from nonce_source (e.g., title)
+        nonce = hashes.Hash(hashes.SHA256(), backend=default_backend())
+        nonce.update(nonce_source)
+        nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
+
+        aesgcm = AESGCM(self.key)
+        return aesgcm.encrypt(nonce_value, plaintext, None)
+
+    def _decrypt(self, nonce_source, ciphertext):
+        """Decrypt the ciphertext deterministically based on nonce_source.
+        
+        Args:
+            nonce_source (bytes): the source of the nonce (e.g., the title)
+            ciphertext (bytes): the ciphertext to decrypt
+
+        Returns:
+            bytes: the decrypted data
+        """
+        # Derive a deterministic 12-byte nonce from nonce_source (e.g., title)
+        nonce = hashes.Hash(hashes.SHA256(), backend=default_backend())
+        nonce.update(nonce_source)
+        nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
+
+        aesgcm = AESGCM(self.key)
+        return aesgcm.decrypt(nonce_value, ciphertext, None)
