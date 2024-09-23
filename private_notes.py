@@ -43,10 +43,10 @@ class PrivNotes:
             if c != checksum:
                 raise ValueError("Checksum mismatch! Potential rollback attack detected.")
 
-            # Extract encrypted data (no nonce needed as it will be deterministic)
+            # Extract encrypted data
             encrypted_data = bytes.fromhex(data[32:])
             try:
-                decrypted_data = self._decrypt(b'titles', encrypted_data)
+                decrypted_data = self._decrypt(b'titles', encrypted_data, False)
                 self.kvs = pickle.loads(decrypted_data)
             except Exception:
                 raise ValueError("Authentication failed! Invalid password or corrupted data.")
@@ -65,7 +65,7 @@ class PrivNotes:
           checksum (str) : a hex-encoded checksum for the data used to protect
                            against rollback attacks (up to 64 characters in length)
         """
-        serialized_data = self.salt.hex() + self._encrypt(b'titles', pickle.dumps(self.kvs)).hex()
+        serialized_data = self.salt.hex() + self._encrypt(b'titles', pickle.dumps(self.kvs), False).hex()
 
         # Compute HMAC-SHA256 checksum
         checksum = hmac.new(self.key, bytes(serialized_data, 'ascii'), digestmod='sha256').hexdigest()
@@ -130,31 +130,48 @@ class PrivNotes:
             del self.kvs[hkey]
             return True
         return False
+    def _pad(self, plaintext):
+        """Pads the plaintext to the fixed length of 2048 bytes."""
+        if len(plaintext) > self.MAX_NOTE_LEN:
+            raise ValueError('Note exceeds maximum length of 2048 bytes')
+        padding_length = self.MAX_NOTE_LEN - len(plaintext)
+        return plaintext + b'\x00' * padding_length  # Pad with null bytes
 
-    def _encrypt(self, nonce_source, plaintext):
+    def _unpad(self, padded_plaintext):
+        """Removes padding (trailing null bytes)."""
+        return padded_plaintext.rstrip(b'\x00')
+    
+    def _encrypt(self, nonce_source, plaintext, noteEncryption = True):
         """Encrypt the plaintext with a nonce based on the title (nonce_source)
         
         Args:
             nonce_source (bytes): The source of the nonce, which in this case, is the title
             plaintext (bytes): the note to encrypt
+            noteEncryption (bool): Checks whether or not we are encrypting for notes, in which case, we'll check the max note size and pad.
 
         Returns:
             bytes: the encrypted data
         """
-        # Derive a deterministic 12-byte nonce from nonce_source (e.g., title)
+        #Adds padding to the plaintext, up to the max len of 2048 bytes
+        if(noteEncryption):
+            new_plaintext = self._pad(plaintext)
+        else:
+            new_plaintext = plaintext
+        
         nonce = hashes.Hash(hashes.SHA256(), backend=default_backend())
         nonce.update(nonce_source)
-        nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
+        nonce_value = nonce.finalize()[:12]  # 12 bit nonce for AES-GCM
 
         aesgcm = AESGCM(self.key)
-        return aesgcm.encrypt(nonce_value, plaintext, nonce_source)
+        return aesgcm.encrypt(nonce_value, new_plaintext, nonce_source)
 
-    def _decrypt(self, nonce_source, ciphertext):
+    def _decrypt(self, nonce_source, ciphertext, noteEncryption = True):
         """Decrypt the ciphertext deterministically based on nonce_source, the title.
         
         Args:
             nonce_source (bytes): the source of the nonce (e.g., the title)
             ciphertext (bytes): the ciphertext to decrypt
+            noteEncryption (bool): Checks whether or not we are decrypting for notes, in which case, we'll check the max note size and pad
 
         Returns:
             bytes: the decrypted data
@@ -165,6 +182,11 @@ class PrivNotes:
         nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
 
         aesgcm = AESGCM(self.key)
-        return aesgcm.decrypt(nonce_value, ciphertext, nonce_source)
+
+        new_plaintext = aesgcm.decrypt(nonce_value, ciphertext, nonce_source)
+        if noteEncryption:
+            return self._unpad(new_plaintext)
+        else:
+            return new_plaintext
         # Returning nonce_source (title) allows us to check
         # if the ciphertext matches with the associated title, helping prevent against swap attacks.
