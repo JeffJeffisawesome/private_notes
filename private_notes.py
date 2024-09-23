@@ -86,7 +86,10 @@ class PrivNotes:
         """
         hkey = hmac.new(self.key, bytes(title, 'ascii'), digestmod='sha256').hexdigest()
         if hkey in self.kvs:
-            encrypted_note = self.kvs[hkey]
+            try:
+                encrypted_note = self.kvs[hkey]
+            except Exception:
+                raise ValueError("Title and Note MisMatch! Potential Swap Attack detected.")
             return self._decrypt(bytes(title, 'ascii'), encrypted_note).decode('ascii')
         return None
 
@@ -186,6 +189,7 @@ class PrivNotes:
         aesgcm = AESGCM(self.key)
 
         new_plaintext = aesgcm.decrypt(nonce_value, ciphertext, nonce_source)
+
         if noteEncryption:
             return self._unpad(new_plaintext)
         else:
