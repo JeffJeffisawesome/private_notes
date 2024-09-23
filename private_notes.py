@@ -132,7 +132,7 @@ class PrivNotes:
         return False
 
     def _encrypt(self, nonce_source, plaintext):
-        """Encrypt the plaintext deterministically based on nonce_source.
+        """Encrypt the plaintext, with a nonce based on the title
         
         Args:
             nonce_source (bytes): The source of the nonce, which in this case, is the title
@@ -150,7 +150,7 @@ class PrivNotes:
         return aesgcm.encrypt(nonce_value, plaintext, nonce_source)
 
     def _decrypt(self, nonce_source, ciphertext):
-        """Decrypt the ciphertext deterministically based on nonce_source.
+        """Decrypt the ciphertext, with the nonce based on the title
         
         Args:
             nonce_source (bytes): the source of the nonce (e.g., the title)
