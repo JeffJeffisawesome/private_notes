@@ -35,9 +35,9 @@ if priv_notes.remove('non-existent'):
 
 print('Serializing notes')
 data, checksum = priv_notes.dump()
-
 print('Loading notes')
 new_notes_instance = PrivNotes('123456', data, checksum)
+
 for title in kvs:
   note1 = priv_notes.get(title)
   note2 = new_notes_instance.get(title)

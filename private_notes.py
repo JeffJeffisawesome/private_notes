@@ -45,8 +45,9 @@ class PrivNotes:
 
             # Extract encrypted data
             encrypted_data = bytes.fromhex(data[32:])
+            self.salt = bytes.fromhex(data[:32])
             try:
-                decrypted_data = self._decrypt(b'titles', encrypted_data, False)
+                decrypted_data = self._decrypt(self.salt, encrypted_data, False)
                 self.kvs = pickle.loads(decrypted_data)
             except Exception:
                 raise ValueError("Authentication failed! Invalid password or corrupted data.")
@@ -65,7 +66,7 @@ class PrivNotes:
           checksum (str) : a hex-encoded checksum for the data used to protect
                            against rollback attacks (up to 64 characters in length)
         """
-        serialized_data = self.salt.hex() + self._encrypt(b'titles', pickle.dumps(self.kvs), False).hex()
+        serialized_data = self.salt.hex() + self._encrypt(self.salt, pickle.dumps(self.kvs), False).hex()
 
         # Compute HMAC-SHA256 checksum
         checksum = hmac.new(self.key, bytes(serialized_data, 'ascii'), digestmod='sha256').hexdigest()
