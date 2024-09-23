@@ -38,15 +38,13 @@ class PrivNotes:
 
         if data is not None:
             # Load and decrypt the database
-            stored_checksum = data[-64:]
-            data_without_checksum = data[:-64]
 
-            c = hmac.new(self.key, bytes(data_without_checksum, 'ascii'), digestmod='sha256').hexdigest()
-            if c != stored_checksum:
+            c = hmac.new(self.key, bytes(data, 'ascii'), digestmod='sha256').hexdigest()
+            if c != checksum:
                 raise ValueError("Checksum mismatch! Potential rollback attack detected.")
 
             # Extract encrypted data (no nonce needed as it will be deterministic)
-            encrypted_data = bytes.fromhex(data_without_checksum[32:])
+            encrypted_data = bytes.fromhex(data[32:])
             try:
                 decrypted_data = self._decrypt(b'titles', encrypted_data)
                 self.kvs = pickle.loads(decrypted_data)
@@ -72,7 +70,7 @@ class PrivNotes:
         # Compute HMAC-SHA256 checksum
         checksum = hmac.new(self.key, bytes(serialized_data, 'ascii'), digestmod='sha256').hexdigest()
 
-        return serialized_data + checksum, checksum
+        return serialized_data, checksum
 
     def get(self, title):
         """Fetches the note associated with a title.
@@ -111,7 +109,7 @@ class PrivNotes:
         # Generate a unique key for the note using HMAC-SHA256
         hkey = hmac.new(self.key, bytes(title, 'ascii'), digestmod='sha256').hexdigest()
 
-        # Encrypt the note using AES-GCM (deterministic nonce)
+        # Encrypt the note using AES-GCM (nonce derived from title)
         encrypted_note = self._encrypt(bytes(title, 'ascii'), bytes(note, 'ascii'))
 
         # Store the encrypted note
@@ -149,7 +147,7 @@ class PrivNotes:
         nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
 
         aesgcm = AESGCM(self.key)
-        return aesgcm.encrypt(nonce_value, plaintext, None)
+        return aesgcm.encrypt(nonce_value, plaintext, nonce_source)
 
     def _decrypt(self, nonce_source, ciphertext):
         """Decrypt the ciphertext deterministically based on nonce_source.
@@ -167,4 +165,6 @@ class PrivNotes:
         nonce_value = nonce.finalize()[:12]  # AES-GCM requires a 12-byte nonce
 
         aesgcm = AESGCM(self.key)
-        return aesgcm.decrypt(nonce_value, ciphertext, None)
+        return aesgcm.decrypt(nonce_value, ciphertext, nonce_source)
+        # Returning nonce_source (title) allows us to check
+        # if the ciphertext matches with the associated title, helping prevent against swap attacks.
