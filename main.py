@@ -18,6 +18,7 @@ for title in kvs:
 print('Trying to fetch notes')
 for title in kvs:
   note = priv_notes.get(title)
+  print(note)
   if note != kvs[title]:
     error('get failed for title %s (expected %s, received %s)' % (title, kvs[title], note))
 note = priv_notes.get('non-existent')

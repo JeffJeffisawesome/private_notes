@@ -26,7 +26,10 @@ class PrivNotes:
         self.kvs = {}
 
         # Derive the key once with PBKDF2
-        self.salt = os.urandom(16) if data is None else bytes.fromhex(data[:32])
+        if data is None:
+            self.salt = os.urandom(16)
+        else: 
+            self.salt = bytes.fromhex(data[:32])
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -35,7 +38,6 @@ class PrivNotes:
             backend=default_backend()
         )
         self.key = kdf.derive(bytes(password, 'ascii'))
-
         if data is not None:
             # Load and decrypt the database
 
