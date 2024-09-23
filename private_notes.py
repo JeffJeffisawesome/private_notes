@@ -45,7 +45,6 @@ class PrivNotes:
 
             # Extract encrypted data
             encrypted_data = bytes.fromhex(data[32:])
-            self.salt = bytes.fromhex(data[:32])
             try:
                 decrypted_data = self._decrypt(self.salt, encrypted_data, False)
                 self.kvs = pickle.loads(decrypted_data)
