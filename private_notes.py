@@ -34,7 +34,7 @@ class PrivNotes:
             algorithm=hashes.SHA256(),
             length=32,
             salt=self.salt,
-            iterations=200000,
+            iterations=2000000,
             backend=default_backend()
         )
         self.key = kdf.derive(bytes(password, 'ascii'))
