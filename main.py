@@ -1,5 +1,4 @@
 from private_notes import PrivNotes
-
 import re
 
 def error(s):
